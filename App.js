@@ -1,271 +1,283 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from "react";
 import {
   StyleSheet,
   Dimensions,
   Text,
   TextInput,
   View,
-  ScrollView,
-  TouchableOpacity,
   ActivityIndicator,
+  ScrollView,
+  Pressable,
   SafeAreaView,
-  StatusBar,
   Alert,
-} from 'react-native';
-import { LineChart } from 'react-native-chart-kit';
+  useWindowDimensions,
+  Platform,
+  RefreshControl,
+} from "react-native";
+import { LineChart } from "react-native-chart-kit";
 
-const { width: screenWidth } = Dimensions.get('window');
+const RadioButton = ({ label, selected, onPress }) => (
+  <Pressable 
+    style={({ pressed }) => [
+      styles.radioWrapper,
+      pressed && styles.radioWrapperPressed
+    ]} 
+    onPress={onPress}
+  >
+    <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
+      {selected && <View style={styles.radioInner} />}
+    </View>
+    <Text style={[styles.radioLabel, selected && styles.radioLabelSelected]}>{label}</Text>
+  </Pressable>
+);
 
-// API Configuration
-const API_URL = 'https://assessments.reliscore.com/api/cric-scores/';
+const SimpleLineChart = ({ chartData, width }) => {
+  const chartWidth = Math.max(width - 32, 300);
+  const chartHeight = Math.min(220, width * 0.5);
 
-// Test data
-const testData = [
-  ["Pakistan", 23],
-  ["Pakistan", 127],
-  ["India", 3],
-  ["India", 71],
-  ["Australia", 31],
-  ["India", 22],
-  ["Pakistan", 81]
-];
+  if (!chartData.labels.length || !chartData.scores.length) {
+    return (
+      <View style={styles.chartContainer}>
+        <Text style={styles.noDataText}>No data available</Text>
+      </View>
+    );
+  }
+
+  const formatLabel = (label) => {
+     return label.length > 10 ? `${label.substring(0, 3)}..` : label;
+  };
+
+  return (
+    <View style={styles.chartContainer}>
+      <LineChart
+        data={{
+          labels: chartData.labels.map(formatLabel),
+          datasets: [{
+            data: chartData.scores.map(score => 
+              isFinite(score) ? score : 0
+            ),
+          }],
+        }}
+        width={chartWidth}
+        height={chartHeight}
+        yAxisLabel=""
+        yAxisSuffix=""
+        chartConfig={{
+          backgroundColor: "#ffffff",
+          backgroundGradientFrom: "#ffffff",
+          backgroundGradientTo: "#ffffff",
+          decimalPlaces: 1,
+          color: (opacity = 1) => `rgba(59, 89, 152, ${opacity})`,
+          labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
+          style: {
+            borderRadius: 16,
+          },
+          propsForDots: {
+            r: "4",
+            strokeWidth: "2",
+            stroke: "#3b5998",
+          },
+          propsForLabels: {
+            // fontSize: width < 375 ? 8 : 10,
+            // rotation: 15,     
+          }, 
+          horizontalOffset: 0,
+          formatXLabel: (label) => formatLabel(label), 
+        }}
+        fromZero={true}
+        segments={4} 
+        bezier
+        style={[
+          styles.chart,
+          { paddingBottom: 20 }  
+        ]}
+      />
+    </View>
+  );
+};
 
 const App = () => {
-  const [mode, setMode] = useState("Test");
+  const { width, height } = useWindowDimensions();
+  const [dataSource, setDataSource] = useState("Test");
   const [data, setData] = useState([]);
-  const [country, setCountry] = useState("");
-  const [average, setAverage] = useState(null);
+  const [countryInput, setCountryInput] = useState("");
+  const [average, setAverage] = useState("N/A");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [retryCount, setRetryCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [chartData, setChartData] = useState({ labels: [], scores: [] });
 
-  // Configuration
-  const MAX_RETRIES = 3;
-  const INITIAL_TIMEOUT = 1000; // 10 seconds
+  const testData = [
+    ["Pakistan", 23],
+    ["Pakistan", 127],
+    ["India", 3],
+    ["India", 71],
+    ["Australia", 31],
+    ["India", 22],
+    ["Pakistan", 81],
+    ["Pakistan", 81],
+  ];
 
-  const fetchWithRetry = async (attempt = 0) => {
-    try {
-      console.log(`Fetch attempt ${attempt + 1} started`);
-      
-      // Increase timeout duration for each retry
-      const timeout = Math.min(5000 * (attempt + 1), 15000); // Start with 5s, max 15s
-      
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-        console.log(`Timeout triggered for attempt ${attempt + 1}`);
-      }, timeout);
-  
-      const response = await fetch(API_URL, {
-        method: 'GET',
-        signal: controller.signal,
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
-          'User-Agent': 'Mozilla/5.0 (compatible; ReactNative)',
-        },
-      });
-  
-      clearTimeout(timeoutId);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! Status: ${response.status}`);
-      }
-      
-      const json = await response.json();
-      console.log('Fetch successful:', json);
-      return json;
-      
-    } catch (error) {
-      console.error(`Attempt ${attempt + 1} failed:`, error);
-      
-      // If we've reached max retries, throw the error
-      if (attempt >= MAX_RETRIES) {
-        throw new Error(`Failed after ${MAX_RETRIES + 1} attempts: ${error.message}`);
-      }
-      
-      // Calculate delay before next retry (exponential backoff)
-      const delay = Math.min(1000 * Math.pow(2, attempt), 10000); // Start with 1s, max 10s
-      console.log(`Waiting ${delay}ms before retry...`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      
-      // Recursive retry
-      return fetchWithRetry(attempt + 1);
-    }
-  };
-  
-  const loadData = async () => {
+  const fetchServerData = useCallback(async () => {
     setLoading(true);
-    setError(null);
-    setRetryCount(0);
-    
-    if (mode === "Test") {
-      console.log('Loading test data');
-      setData(testData);
-      setLoading(false);
-      return;
-    }
-  
     try {
-      const json = await fetchWithRetry();
-      setData(json);
+      const response = await fetch(
+        "https://assessments.reliscore.com/api/cric-scores/"
+      );
+      const result = await response.json();
+      setData(result);
     } catch (error) {
-      console.error('Final error:', error);
-      setError(error.message);
-      setData([]);
+      console.error("Error fetching data:", error);
+      Alert.alert(
+        "Error",
+        "Failed to fetch data from server. Please try again later.",
+        [{ text: "OK" }]
+      );
     } finally {
       setLoading(false);
     }
-  };
-  useEffect(() => {
-    loadData();
-  }, [mode]);
+  }, []);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    if (dataSource === "Server") {
+      await fetchServerData();
+    }
+    setRefreshing(false);
+  }, [dataSource, fetchServerData]);
 
   useEffect(() => {
-    if (country.trim() === "") {
-      setAverage(null);
+    if (dataSource === "Server") {
+      fetchServerData();
+    } else {
+      setData(testData);
+    }
+  }, [dataSource, fetchServerData]);
+
+  useEffect(() => {
+    calculateChartData();
+  }, [data]);
+
+  const calculateAverage = useCallback((country) => {
+    if (!country) {
+      setAverage("N/A");
       return;
     }
-
-    const scores = data
-      .filter(([c]) => c.toLowerCase() === country.toLowerCase())
-      .map(([, score]) => score);
-
-    if (scores.length > 0) {
-      const avg = scores.reduce((sum, val) => sum + val, 0) / scores.length;
-      setAverage(avg);
+  
+    const filteredScores = data.filter(([name]) =>
+      name.toLowerCase() === country.toLowerCase()
+    );
+    
+    if (filteredScores.length === 0) {
+      setAverage("N/A");
     } else {
-      setAverage(null);
+      const total = filteredScores.reduce((sum, [, score]) => sum + score, 0);
+      const avg = total / filteredScores.length;
+      setAverage(avg.toFixed(2));
     }
-  }, [country, data]);
+  }, [data]);
 
-  const getChartData = () => {
+  const calculateChartData = useCallback(() => {
     const countryScores = {};
-    data.forEach(([c, score]) => {
-      if (!countryScores[c]) {
-        countryScores[c] = [];
+    
+    // Validate input data
+    if (!Array.isArray(data) || data.length === 0) {
+      setChartData({ labels: [], scores: [] });
+      return;
+    }
+  
+    // Process valid scores only
+    data.forEach(([country, score]) => {
+      if (country && typeof score === 'number' && !isNaN(score) && isFinite(score)) {
+        if (!countryScores[country]) {
+          countryScores[country] = [];
+        }
+        countryScores[country].push(score);
       }
-      countryScores[c].push(score);
     });
+  
+    const labels = Object.keys(countryScores);
+    const scores = labels.map(country => {
+      const validScores = countryScores[country];
+      if (validScores.length === 0) return 0;
+      return validScores.reduce((sum, val) => sum + val, 0) / validScores.length;
+    });
+  
+    const validScores = scores.every(score => isFinite(score) && !isNaN(score));
+    if (!validScores) {
+      setChartData({ labels: [], scores: [] });
+      return;
+    }
+  
+    setChartData({ labels, scores });
+  }, [data]);
 
-    return {
-      labels: Object.keys(countryScores),
-      datasets: [{
-        data: Object.values(countryScores).map(scores => 
-          scores.reduce((sum, score) => sum + score, 0) / scores.length
-        ),
-      }]
-    };
-  };
-
-  const CustomButton = ({ title, isActive, onPress }) => (
-    <TouchableOpacity 
-      style={[styles.button, isActive && styles.activeButton]} 
-      onPress={onPress}
-    >
-      <Text style={[styles.buttonText, isActive && styles.activeButtonText]}>
-        {title}
-      </Text>
-    </TouchableOpacity>
-  );
+  const handleInputChange = useCallback((text) => {
+    setCountryInput(text);
+    calculateAverage(text);
+  }, [calculateAverage]);
 
   return (
     <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor="#f8f8f8" />
-      <ScrollView 
+      <ScrollView
         contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
       >
-        <View style={styles.card}>
-          <Text style={styles.title}>Cricket Scores Analysis</Text>
+        <Text style={styles.title}>Cricket Score Analyzer</Text>
 
-          <View style={styles.buttonGroup}>
-            <CustomButton 
-              title="Test Data" 
-              isActive={mode === "Test"} 
-              onPress={() => setMode("Test")} 
-            />
-            <CustomButton 
-              title="Server Data" 
-              isActive={mode === "Server"} 
-              onPress={() => setMode("Server")} 
-            />
-          </View>
+        <View style={styles.radioGroup}>
+          <RadioButton
+            label="Test data"
+            selected={dataSource === "Test"}
+            onPress={() => setDataSource("Test")}
+          />
+          <RadioButton
+            label="Server data"
+            selected={dataSource === "Server"}
+            onPress={() => setDataSource("Server")}
+          />
+        </View>
 
-          {loading ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#007AFF" style={styles.loader} />
-              {retryCount > 0 && (
-                <Text style={styles.retryText}>
-                  Retry attempt {retryCount} of {MAX_RETRIES}...
+        {loading ? (
+          <ActivityIndicator 
+            style={styles.loader} 
+            size="large" 
+            color="#3b5998" 
+          />
+        ) : (
+          <View style={styles.content}>
+            <View style={styles.inputContainer}>
+              <Text style={styles.label}>Search country:</Text>
+              <TextInput
+                style={[styles.input, { width: width - 32 }]}
+                value={countryInput}
+                onChangeText={handleInputChange}
+                placeholder="eg: India, Pakistan, Australia"
+                placeholderTextColor="#666"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+            
+            {average !== "N/A" && (
+              <View style={styles.averageContainer}>
+                <Text style={styles.averageLabel}>
+                  Average Score: <Text style={styles.averageValue}>{average}</Text>
                 </Text>
-              )}
-            </View>
-          ) : error ? (
-            <View style={styles.errorContainer}>
-              <Text style={styles.error}>{error}</Text>
-              <TouchableOpacity 
-                style={styles.retryButton}
-                onPress={loadData}
-              >
-                <Text style={styles.retryButtonText}>Try Again</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <>
-              <View style={styles.inputContainer}>
-                <Text style={styles.label}>Enter Country Name:</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g., India, Pakistan, Australia"
-                  value={country}
-                  onChangeText={setCountry}
-                  placeholderTextColor="#999"
-                  autoCorrect={false}
-                  autoCapitalize="none"
+                <View
+                  style={[
+                    styles.bar,
+                    { width: Math.min((width * parseFloat(average)) / 300, width - 32) },
+                  ]}
                 />
               </View>
+            )}
 
-              {country && (
-                <View style={styles.averageContainer}>
-                  <Text style={styles.label}>Average Score:</Text>
-                  <Text style={styles.averageValue}>
-                    {average !== null ? average.toFixed(2) : "No data available"}
-                  </Text>
-                </View>
-              )}
-
-              {data.length > 0 && (
-                <View style={styles.chartContainer}>
-                  <Text style={styles.chartTitle}>Average Scores by Country</Text>
-                  <LineChart
-                    data={getChartData()}
-                    width={screenWidth - 48}
-                    height={220}
-                    chartConfig={{
-                      backgroundColor: "#fff",
-                      backgroundGradientFrom: "#fff",
-                      backgroundGradientTo: "#fff",
-                      decimalPlaces: 1,
-                      color: (opacity = 1) => `rgba(0, 122, 255, ${opacity})`,
-                      labelColor: (opacity = 1) => `rgba(0, 0, 0, ${opacity})`,
-                      style: {
-                        borderRadius: 16,
-                      },
-                      propsForLabels: {
-                        fontSize: 12,
-                      },
-                    }}
-                    bezier
-                    style={styles.chart}
-                  />
-                </View>
-              )}
-            </>
-          )}
-        </View>
+            <Text style={styles.chartTitle}>Average Scores by Country</Text>
+            <SimpleLineChart chartData={chartData} width={width} />
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -274,139 +286,141 @@ const App = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f8f8f8',
+    backgroundColor: "#f5f6fa",
   },
   scrollContent: {
-    flexGrow: 1,
     padding: 16,
-  },
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    paddingBottom: 32,
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    fontSize: 28,
+    fontWeight: "bold",
+    textAlign: "center",
     marginBottom: 24,
-    textAlign: 'center',
-    color: '#333',
+    color: "#3b5998",
+    ...Platform.select({
+      ios: {
+        fontFamily: "System",
+      },
+      android: {
+        fontFamily: "Roboto",
+      },
+    }),
   },
-  buttonGroup: {
-    flexDirection: 'row',
-    justifyContent: 'center',
+  radioGroup: {
+    flexDirection: "row",
+    justifyContent: "center",
     marginBottom: 24,
-    flexWrap: 'wrap',
+    gap: 24,
   },
-  button: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    backgroundColor: '#f0f0f0',
-    marginHorizontal: 8,
-    marginBottom: 8,
-    minWidth: 120,
-  },
-  activeButton: {
-    backgroundColor: '#007AFF',
-  },
-  buttonText: {
-    textAlign: 'center',
-    fontSize: 16,
-    color: '#333',
-  },
-  activeButtonText: {
-    color: '#fff',
-  },
-  testButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    backgroundColor: '#4CAF50',
-    marginHorizontal: 8,
-    marginBottom: 8,
-  },
-  testButtonText: {
-    color: '#fff',
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  loadingContainer: {
-    alignItems: 'center',
-    marginVertical: 24,
-  },
-  loader: {
-    marginBottom: 12,
-  },
-  retryText: {
-    color: '#666',
-    fontSize: 14,
-  },
-  errorContainer: {
-    alignItems: 'center',
-    marginVertical: 24,
-  },
-  error: {
-    color: '#FF3B30',
-    textAlign: 'center',
-    marginBottom: 16,
-    fontSize: 16,
-  },
-  retryButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+  radioWrapper: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 8,
     borderRadius: 8,
   },
-  retryButtonText: {
-    color: '#fff',
+  radioWrapperPressed: {
+    opacity: 0.7,
+  },
+  radioOuter: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#3b5998",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 8,
+  },
+  radioOuterSelected: {
+    borderColor: "#3b5998",
+  },
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: "#3b5998",
+  },
+  radioLabel: {
     fontSize: 16,
-    fontWeight: '500',
+    color: "#333",
+    fontWeight: "500",
+  },
+  radioLabelSelected: {
+    color: "#3b5998",
+  },
+  content: {
+    flex: 1,
+    alignItems: "stretch",
   },
   inputContainer: {
     marginBottom: 24,
   },
   label: {
     fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
     marginBottom: 8,
-    color: '#333',
-    fontWeight: '500',
   },
   input: {
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
+    borderColor: "#ddd",
+    borderRadius: 12,
+    padding: 16,
     fontSize: 16,
-    backgroundColor: '#fff',
-    color: '#333',
+    backgroundColor: "#fff",
+    color: "#333",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
   },
   averageContainer: {
     marginBottom: 24,
   },
-  averageValue: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#007AFF',
+  averageLabel: {
+    fontSize: 16,
+    color: "#333",
+    marginBottom: 8,
   },
-  chartContainer: {
-    marginTop: 24,
-    alignItems: 'center',
+  averageValue: {
+    fontWeight: "bold",
+    color: "#3b5998",
+  },
+  bar: {
+    height: 12,
+    backgroundColor: "#3b5998",
+    borderRadius: 6,
   },
   chartTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 20,
+    fontWeight: "600",
+    color: "#333",
     marginBottom: 16,
-    color: '#333',
+    textAlign: "center",
+  },
+  chartContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
   },
   chart: {
-    borderRadius: 16,
     marginVertical: 8,
+    borderRadius: 16,
+  },
+  loader: {
+    marginVertical: 32,
+  },
+  noDataText: {
+    textAlign: 'center',
+    padding: 20,
+    color: '#666',
+    fontSize: 16,
   },
 });
 
