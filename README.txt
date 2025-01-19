@@ -34,7 +34,12 @@ Line Chart: Displays average scores by country.
 Pull-to-refresh: Reload data when swiping down.
 
 Status --
+Working:
 Data fetching (Test/Server).
 Average score calculation.
 Line chart display.
 Pull-to-refresh functionality.
+
+Known Issues:
+No error handling for invalid country names.
+Data is not persisted after app restart.
